@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useCallback, useRef, Suspense } from "react"
-import { useRouter, useSearchParams } from "next/navigation"
+import { useSearchParams } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
 import { SpinWheel, SLICE_PALETTE, type Participant } from "@/components/spin-wheel"
 import { Confetti } from "@/components/confetti"
@@ -49,9 +49,6 @@ function toParticipant(p: DbParticipant): Participant {
   return { id: p.id, name: p.name, color: p.color, isWinner: p.is_winner }
 }
 
-/**
- * Loading screen shown while room initializes.
- */
 function LoadingScreen() {
   return (
     <div className="min-h-dvh bg-background flex items-center justify-center">
@@ -61,53 +58,23 @@ function LoadingScreen() {
 }
 
 /**
- * Creates a new room and redirects to admin URL.
- * Uses useMountEffect — runs once on mount, no useEffect.
+ * Main wheel app. Handles three states:
+ * 1. No room param → create a room, then show admin view
+ * 2. Room param + admin param → admin view
+ * 3. Room param only → participant view
+ *
+ * Room creation is handled internally with state (not router.replace)
+ * to avoid navigation/hydration issues.
  */
-function RoomCreator() {
-  const router = useRouter()
-  const supabase = createClient()
-  const [error, setError] = useState<string | null>(null)
-
-  useMountEffect(() => {
-    async function create() {
-      const adminCode = Math.random().toString(36).substring(2, 10).toUpperCase()
-      const { data, error } = await supabase
-        .from("rooms")
-        .insert({ name: "Spin the Wheel", admin_code: adminCode, is_active: true })
-        .select()
-        .single()
-
-      if (error || !data) {
-        setError("Failed to create room. Please refresh.")
-        return
-      }
-
-      router.replace(`/?room=${data.id}&admin=${adminCode}`)
-    }
-    create()
-  })
-
-  if (error) {
-    return (
-      <div className="min-h-dvh bg-background flex items-center justify-center p-4">
-        <Alert variant="destructive" className="max-w-sm">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      </div>
-    )
-  }
-
-  return <LoadingScreen />
-}
-
-/**
- * Main room view — handles admin vs participant roles, real-time sync.
- * Key={roomId} ensures clean mount per room.
- */
-function RoomView({ roomId, adminParam }: { roomId: string; adminParam: string | null }) {
+function WheelApp() {
+  const searchParams = useSearchParams()
   const supabase = createClient()
 
+  // URL params
+  const urlRoomId = searchParams.get("room")
+  const urlAdminParam = searchParams.get("admin")
+
+  // State
   const [room, setRoom] = useState<Room | null>(null)
   const [participants, setParticipants] = useState<Participant[]>([])
   const [isAdmin, setIsAdmin] = useState(false)
@@ -121,49 +88,29 @@ function RoomView({ roomId, adminParam }: { roomId: string; adminParam: string |
   const [copiedParticipant, setCopiedParticipant] = useState(false)
   const [copiedAdmin, setCopiedAdmin] = useState(false)
   const spinKeyRef = useRef(0)
+  const roomCreatedRef = useRef(false)
 
   const isSpinning = spinTarget !== null
   const nonWinners = participants.filter((p) => !p.isWinner)
 
-  // Load room + participants + subscribe to realtime — one-time mount sync
+  // Single mount effect — handles both room creation and room loading
   useMountEffect(() => {
     let channel: ReturnType<typeof supabase.channel> | null = null
+    let cancelled = false
 
-    async function init() {
-      // Load room
-      const { data: roomData, error: roomError } = await supabase
-        .from("rooms")
+    async function loadParticipants(roomId: string) {
+      const { data } = await supabase
+        .from("participants")
         .select("*")
-        .eq("id", roomId)
-        .single()
+        .eq("room_id", roomId)
+        .order("created_at", { ascending: true })
 
-      if (roomError || !roomData) {
-        setError("Room not found. Please check your link.")
-        setIsLoading(false)
-        return
+      if (data && !cancelled) {
+        setParticipants(data.map(toParticipant))
       }
+    }
 
-      setRoom(roomData)
-      if (adminParam === roomData.admin_code) {
-        setIsAdmin(true)
-      }
-
-      // Load participants
-      const loadParticipants = async () => {
-        const { data } = await supabase
-          .from("participants")
-          .select("*")
-          .eq("room_id", roomId)
-          .order("created_at", { ascending: true })
-
-        if (data) {
-          setParticipants(data.map(toParticipant))
-        }
-      }
-
-      await loadParticipants()
-
-      // Subscribe to real-time changes
+    function subscribeToRoom(roomId: string) {
       channel = supabase
         .channel(`room:${roomId}`)
         .on(
@@ -175,26 +122,91 @@ function RoomView({ roomId, adminParam }: { roomId: string; adminParam: string |
             filter: `room_id=eq.${roomId}`,
           },
           () => {
-            loadParticipants()
+            loadParticipants(roomId)
           }
         )
         .subscribe()
-
-      setIsLoading(false)
     }
 
-    init()
+    async function initExistingRoom(roomId: string, adminCode: string | null) {
+      const { data: roomData, error: roomError } = await supabase
+        .from("rooms")
+        .select("*")
+        .eq("id", roomId)
+        .single()
+
+      if (roomError || !roomData) {
+        if (!cancelled) {
+          setError("Room not found. Check your link or create a new room.")
+          setIsLoading(false)
+        }
+        return
+      }
+
+      if (!cancelled) {
+        setRoom(roomData)
+        if (adminCode && adminCode === roomData.admin_code) {
+          setIsAdmin(true)
+        }
+
+        await loadParticipants(roomId)
+        subscribeToRoom(roomId)
+        setIsLoading(false)
+      }
+    }
+
+    async function createNewRoom() {
+      // Guard against double-mount (React strict mode)
+      if (roomCreatedRef.current) return
+      roomCreatedRef.current = true
+
+      const adminCode = Math.random().toString(36).substring(2, 10).toUpperCase()
+      const { data, error: createError } = await supabase
+        .from("rooms")
+        .insert({ name: "Spin the Wheel", admin_code: adminCode, is_active: true })
+        .select()
+        .single()
+
+      if (createError || !data) {
+        if (!cancelled) {
+          setError("Failed to create room. Please refresh.")
+          setIsLoading(false)
+        }
+        return
+      }
+
+      if (!cancelled) {
+        setRoom(data)
+        setIsAdmin(true)
+
+        // Update URL without full navigation — just push to history
+        const newUrl = `${window.location.pathname}?room=${data.id}&admin=${adminCode}`
+        window.history.replaceState({}, "", newUrl)
+
+        subscribeToRoom(data.id)
+        setIsLoading(false)
+      }
+    }
+
+    if (urlRoomId) {
+      initExistingRoom(urlRoomId, urlAdminParam)
+    } else {
+      createNewRoom()
+    }
 
     return () => {
+      cancelled = true
       if (channel) {
         supabase.removeChannel(channel)
       }
     }
   })
 
+  // --- Event handlers (no useEffect) ---
+
   const handleJoin = useCallback(async () => {
     const trimmed = name.trim()
-    if (!trimmed || !roomId || isJoining) return
+    if (!trimmed || !room || isJoining) return
 
     if (trimmed.length < 2) {
       setError("Name must be at least 2 characters.")
@@ -208,11 +220,10 @@ function RoomView({ roomId, adminParam }: { roomId: string; adminParam: string |
     setIsJoining(true)
     setError(null)
 
-    // Check for duplicate name
     const { data: existing } = await supabase
       .from("participants")
       .select("id")
-      .eq("room_id", roomId)
+      .eq("room_id", room.id)
       .eq("name", trimmed)
       .single()
 
@@ -225,7 +236,7 @@ function RoomView({ roomId, adminParam }: { roomId: string; adminParam: string |
     const color = SLICE_PALETTE[participants.length % SLICE_PALETTE.length]
 
     const { error: insertError } = await supabase.from("participants").insert({
-      room_id: roomId,
+      room_id: room.id,
       name: trimmed,
       color,
       is_winner: false,
@@ -233,16 +244,14 @@ function RoomView({ roomId, adminParam }: { roomId: string; adminParam: string |
 
     if (insertError) {
       setError("Failed to join. Please try again.")
-      setIsJoining(false)
-      return
     }
 
     setName("")
     setIsJoining(false)
-  }, [name, roomId, isJoining, participants.length, supabase])
+  }, [name, room, isJoining, participants.length, supabase])
 
   async function handleSpin() {
-    if (!roomId || participants.length === 0 || isSpinning) return
+    if (!room || participants.length === 0 || isSpinning) return
     if (nonWinners.length === 0) {
       setError("Everyone has won. Reset winners first.")
       return
@@ -256,9 +265,8 @@ function RoomView({ roomId, adminParam }: { roomId: string; adminParam: string |
     spinKeyRef.current += 1
     setSpinTarget({ winnerId: winner.id, spinKey: spinKeyRef.current })
 
-    // Record spin and mark winner in DB
     await supabase.from("spins").insert({
-      room_id: roomId,
+      room_id: room.id,
       winner_id: winner.id,
       winner_name: winner.name,
     })
@@ -278,7 +286,7 @@ function RoomView({ roomId, adminParam }: { roomId: string; adminParam: string |
   }
 
   async function handleManualPick() {
-    if (!roomId || participants.length === 0) return
+    if (!room || participants.length === 0) return
     if (nonWinners.length === 0) {
       setError("Everyone has won. Reset winners first.")
       return
@@ -289,7 +297,7 @@ function RoomView({ roomId, adminParam }: { roomId: string; adminParam: string |
 
     await supabase.from("participants").update({ is_winner: true }).eq("id", winner.id)
     await supabase.from("spins").insert({
-      room_id: roomId,
+      room_id: room.id,
       winner_id: winner.id,
       winner_name: winner.name,
     })
@@ -302,8 +310,8 @@ function RoomView({ roomId, adminParam }: { roomId: string; adminParam: string |
   }
 
   async function handleReset() {
-    if (!roomId) return
-    await supabase.from("participants").update({ is_winner: false }).eq("room_id", roomId)
+    if (!room) return
+    await supabase.from("participants").update({ is_winner: false }).eq("room_id", room.id)
     setParticipants((prev) => prev.map((p) => ({ ...p, isWinner: false })))
     setCurrentWinner(null)
     setShowConfetti(false)
@@ -311,8 +319,8 @@ function RoomView({ roomId, adminParam }: { roomId: string; adminParam: string |
   }
 
   async function handleClearAll() {
-    if (!roomId) return
-    await supabase.from("participants").delete().eq("room_id", roomId)
+    if (!room) return
+    await supabase.from("participants").delete().eq("room_id", room.id)
     setParticipants([])
     setCurrentWinner(null)
     setShowConfetti(false)
@@ -341,20 +349,35 @@ function RoomView({ roomId, adminParam }: { roomId: string; adminParam: string |
     }
   }
 
-  const shareUrl = typeof window !== "undefined" ? `${window.location.origin}/?room=${roomId}` : ""
+  // --- Derived URLs ---
+  const shareUrl =
+    typeof window !== "undefined" && room
+      ? `${window.location.origin}/?room=${room.id}`
+      : ""
   const adminUrl =
     typeof window !== "undefined" && room
-      ? `${window.location.origin}/?room=${roomId}&admin=${room.admin_code}`
+      ? `${window.location.origin}/?room=${room.id}&admin=${room.admin_code}`
       : ""
+
+  // --- Render ---
 
   if (isLoading) return <LoadingScreen />
 
   if (error && !room) {
     return (
-      <div className="min-h-dvh bg-background flex items-center justify-center p-4">
+      <div className="min-h-dvh bg-background flex flex-col items-center justify-center p-4 gap-4">
         <Alert variant="destructive" className="max-w-sm">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
+        <Button
+          onClick={() => {
+            window.location.href = window.location.origin
+          }}
+          variant="outline"
+          size="sm"
+        >
+          Create New Room
+        </Button>
       </div>
     )
   }
@@ -407,7 +430,6 @@ function RoomView({ roomId, adminParam }: { roomId: string; adminParam: string |
                   onSpinComplete={handleSpinComplete}
                 />
 
-                {/* Winner announcement */}
                 {currentWinner && (
                   <div className="mt-4 md:mt-6 text-center animate-in fade-in zoom-in-95 duration-300">
                     <div className="inline-flex items-center gap-2.5 rounded-lg border border-red-500/30 bg-red-500/10 px-5 py-3 animate-pulse-glow">
@@ -419,7 +441,7 @@ function RoomView({ roomId, adminParam }: { roomId: string; adminParam: string |
                   </div>
                 )}
 
-                {/* Admin controls — only visible to admin */}
+                {/* Admin controls */}
                 {isAdmin && (
                   <div className="mt-4 md:mt-6 flex gap-2 max-w-sm mx-auto">
                     <Button
@@ -451,13 +473,20 @@ function RoomView({ roomId, adminParam }: { roomId: string; adminParam: string |
                     </Button>
                   </div>
                 )}
+
+                {/* Participant-only message — no controls */}
+                {!isAdmin && participants.length > 0 && (
+                  <p className="mt-4 text-center text-xs text-muted-foreground">
+                    Waiting for the admin to spin the wheel\u2026
+                  </p>
+                )}
               </CardContent>
             </Card>
           </div>
 
           {/* Sidebar */}
           <div className="space-y-4 order-1 lg:order-2">
-            {/* Add participant — visible to everyone */}
+            {/* Join */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground uppercase tracking-wider">
@@ -556,7 +585,7 @@ function RoomView({ roomId, adminParam }: { roomId: string; adminParam: string |
               </CardContent>
             </Card>
 
-            {/* Share links — admin sees both, participants see participant link */}
+            {/* Share links */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground uppercase tracking-wider">
@@ -626,26 +655,10 @@ function RoomView({ roomId, adminParam }: { roomId: string; adminParam: string |
   )
 }
 
-/**
- * Router: no roomId → create room. Has roomId → load room view.
- * Conditional mounting eliminates useEffect for room init logic.
- */
-function WheelRouter() {
-  const searchParams = useSearchParams()
-  const roomId = searchParams.get("room")
-  const adminParam = searchParams.get("admin")
-
-  if (!roomId) {
-    return <RoomCreator />
-  }
-
-  return <RoomView key={roomId} roomId={roomId} adminParam={adminParam} />
-}
-
 export default function WheelContentWrapper() {
   return (
     <Suspense fallback={<LoadingScreen />}>
-      <WheelRouter />
+      <WheelApp />
     </Suspense>
   )
 }
