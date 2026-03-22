@@ -78,6 +78,8 @@ function WheelApp() {
   const [room, setRoom] = useState<Room | null>(null)
   const [participants, setParticipants] = useState<Participant[]>([])
   const [isAdmin, setIsAdmin] = useState(false)
+  const [hasJoined, setHasJoined] = useState(false)
+  const [joinedName, setJoinedName] = useState<string | null>(null)
   const [name, setName] = useState("")
   const [isJoining, setIsJoining] = useState(false)
   const [spinTarget, setSpinTarget] = useState<{ winnerId: string; spinKey: number } | null>(null)
@@ -188,6 +190,16 @@ function WheelApp() {
       }
     }
 
+    // Check if this participant already joined this room
+    const effectiveRoomId = urlRoomId
+    if (effectiveRoomId) {
+      const stored = localStorage.getItem(`wheel-joined-${effectiveRoomId}`)
+      if (stored) {
+        setHasJoined(true)
+        setJoinedName(stored)
+      }
+    }
+
     if (urlRoomId) {
       initExistingRoom(urlRoomId, urlAdminParam)
     } else {
@@ -244,8 +256,14 @@ function WheelApp() {
 
     if (insertError) {
       setError("Failed to join. Please try again.")
+      setIsJoining(false)
+      return
     }
 
+    // Persist join to localStorage — one name per browser per room
+    localStorage.setItem(`wheel-joined-${room.id}`, trimmed)
+    setHasJoined(true)
+    setJoinedName(trimmed)
     setName("")
     setIsJoining(false)
   }, [name, room, isJoining, participants.length, supabase])
@@ -486,32 +504,43 @@ function WheelApp() {
 
           {/* Sidebar */}
           <div className="space-y-4 order-1 lg:order-2">
-            {/* Join */}
+            {/* Join — show form or confirmation */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground uppercase tracking-wider">
                   <Plus className="w-3.5 h-3.5" />
-                  Join the Wheel
+                  {hasJoined && !isAdmin ? "You're In" : "Join the Wheel"}
                 </CardTitle>
               </CardHeader>
-              <CardContent className="space-y-2.5">
-                <Input
-                  placeholder="Enter your name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleJoin()}
-                  className="h-10 text-sm"
-                  maxLength={20}
-                  autoComplete="off"
-                  disabled={isJoining}
-                />
-                <Button
-                  onClick={handleJoin}
-                  className="w-full h-9 bg-red-600 hover:bg-red-700 text-white font-medium text-sm transition-colors"
-                  disabled={!name.trim() || isJoining}
-                >
-                  {isJoining ? "Joining\u2026" : "Join"}
-                </Button>
+              <CardContent>
+                {hasJoined && !isAdmin ? (
+                  <div className="flex items-center gap-2.5 py-2">
+                    <Check className="w-4 h-4 text-green-500 shrink-0" />
+                    <p className="text-sm text-foreground">
+                      You joined as <span className="font-semibold">{joinedName}</span>
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2.5">
+                    <Input
+                      placeholder="Enter your name"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleJoin()}
+                      className="h-10 text-sm"
+                      maxLength={20}
+                      autoComplete="off"
+                      disabled={isJoining}
+                    />
+                    <Button
+                      onClick={handleJoin}
+                      className="w-full h-9 bg-red-600 hover:bg-red-700 text-white font-medium text-sm transition-colors"
+                      disabled={!name.trim() || isJoining}
+                    >
+                      {isJoining ? "Joining\u2026" : "Join"}
+                    </Button>
+                  </div>
+                )}
               </CardContent>
             </Card>
 
