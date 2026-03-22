@@ -181,7 +181,9 @@ function RoomView() {
     let channel: ReturnType<typeof supabase.channel> | null = null
     let cancelled = false
 
-    async function loadParticipants(roomId: string) {
+    let previousWinnerIds: Set<string> = new Set()
+
+    async function loadParticipants(roomId: string, detectNewWinner = false) {
       const { data } = await supabase
         .from("participants")
         .select("*")
@@ -189,7 +191,29 @@ function RoomView() {
         .order("created_at", { ascending: true })
 
       if (data && !cancelled) {
-        setParticipants(data.map(toParticipant))
+        const mapped = data.map(toParticipant)
+        setParticipants(mapped)
+
+        // Detect if a new winner appeared (from admin spinning on another browser)
+        if (detectNewWinner) {
+          const currentWinnerIds = new Set(
+            mapped.filter((p) => p.isWinner).map((p) => p.id)
+          )
+          for (const p of mapped) {
+            if (p.isWinner && !previousWinnerIds.has(p.id)) {
+              // New winner detected — show banner + confetti
+              setCurrentWinner(p.name)
+              setShowConfetti(true)
+              break
+            }
+          }
+          previousWinnerIds = currentWinnerIds
+        } else {
+          // Initial load — just record current winners, don't trigger confetti
+          previousWinnerIds = new Set(
+            mapped.filter((p) => p.isWinner).map((p) => p.id)
+          )
+        }
       }
     }
 
@@ -205,7 +229,7 @@ function RoomView() {
             filter: `room_id=eq.${roomId}`,
           },
           () => {
-            loadParticipants(roomId)
+            loadParticipants(roomId, true)
           }
         )
         .subscribe()
@@ -640,7 +664,7 @@ function RoomView() {
                       {isAdmin && (
                         <button
                           onClick={() => handleRemoveParticipant(participant.id)}
-                          className="text-muted-foreground/50 hover:text-red-500 shrink-0 ml-1 p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                          className="text-muted-foreground/50 hover:text-red-500 shrink-0 ml-1 p-1 opacity-60 md:opacity-0 md:group-hover:opacity-100 transition-opacity"
                         >
                           <X className="w-3.5 h-3.5" />
                         </button>
