@@ -58,15 +58,97 @@ function LoadingScreen() {
 }
 
 /**
- * Main wheel app. Handles three states:
- * 1. No room param → create a room, then show admin view
- * 2. Room param + admin param → admin view
- * 3. Room param only → participant view
- *
- * Room creation is handled internally with state (not router.replace)
- * to avoid navigation/hydration issues.
+ * Landing page — shown when no room param in URL.
+ * Clean shell with a single "Create Room" button.
  */
-function WheelApp() {
+function LandingPage() {
+  const supabase = createClient()
+  const [isCreating, setIsCreating] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleCreate() {
+    if (isCreating) return
+    setIsCreating(true)
+    setError(null)
+
+    const adminCode = Math.random().toString(36).substring(2, 10).toUpperCase()
+    const { data, error: createError } = await supabase
+      .from("rooms")
+      .insert({ name: "Spin the Wheel", admin_code: adminCode, is_active: true })
+      .select()
+      .single()
+
+    if (createError || !data) {
+      setError("Failed to create room. Please try again.")
+      setIsCreating(false)
+      return
+    }
+
+    // Navigate to admin URL
+    window.location.href = `${window.location.origin}/?room=${data.id}&admin=${adminCode}`
+  }
+
+  return (
+    <div className="min-h-dvh bg-background text-foreground flex flex-col">
+      <header className="border-b border-border/50 px-4 py-4 md:py-5">
+        <div className="max-w-6xl mx-auto flex items-center gap-2.5">
+          <div className="w-7 h-7 md:w-8 md:h-8 rounded-lg bg-red-600 flex items-center justify-center">
+            <Zap className="w-4 h-4 md:w-5 md:h-5 text-white" />
+          </div>
+          <h1 className="text-lg md:text-xl font-semibold tracking-tight">
+            Spin the Wheel
+          </h1>
+        </div>
+      </header>
+
+      <main className="flex-1 flex items-center justify-center p-4">
+        <div className="text-center max-w-md space-y-6">
+          <div className="space-y-2">
+            <h2 className="text-2xl md:text-3xl font-bold tracking-tight">
+              Pick a random winner
+            </h2>
+            <p className="text-sm md:text-base text-muted-foreground leading-relaxed">
+              Create a room, share the link with participants, and spin the wheel to choose a winner.
+            </p>
+          </div>
+
+          {error && (
+            <Alert variant="destructive">
+              <AlertDescription className="text-sm">{error}</AlertDescription>
+            </Alert>
+          )}
+
+          <Button
+            onClick={handleCreate}
+            disabled={isCreating}
+            size="lg"
+            className="h-12 px-8 bg-red-600 hover:bg-red-700 text-white font-semibold text-base transition-colors"
+          >
+            {isCreating ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                Creating...
+              </>
+            ) : (
+              "Create a Room"
+            )}
+          </Button>
+
+          <p className="text-xs text-muted-foreground/60">
+            You'll get an admin link to control the wheel and a participant link to share.
+          </p>
+        </div>
+      </main>
+    </div>
+  )
+}
+
+/**
+ * Room view. Two modes:
+ * - Admin (room + admin param matches): full controls
+ * - Participant (room only): join + watch
+ */
+function RoomView() {
   const searchParams = useSearchParams()
   const supabase = createClient()
 
@@ -90,7 +172,6 @@ function WheelApp() {
   const [copiedParticipant, setCopiedParticipant] = useState(false)
   const [copiedAdmin, setCopiedAdmin] = useState(false)
   const spinKeyRef = useRef(0)
-  const roomCreatedRef = useRef(false)
 
   const isSpinning = spinTarget !== null
   const nonWinners = participants.filter((p) => !p.isWinner)
@@ -157,53 +238,14 @@ function WheelApp() {
       }
     }
 
-    async function createNewRoom() {
-      // Guard against double-mount (React strict mode)
-      if (roomCreatedRef.current) return
-      roomCreatedRef.current = true
-
-      const adminCode = Math.random().toString(36).substring(2, 10).toUpperCase()
-      const { data, error: createError } = await supabase
-        .from("rooms")
-        .insert({ name: "Spin the Wheel", admin_code: adminCode, is_active: true })
-        .select()
-        .single()
-
-      if (createError || !data) {
-        if (!cancelled) {
-          setError("Failed to create room. Please refresh.")
-          setIsLoading(false)
-        }
-        return
-      }
-
-      if (!cancelled) {
-        setRoom(data)
-        setIsAdmin(true)
-
-        // Update URL without full navigation — just push to history
-        const newUrl = `${window.location.pathname}?room=${data.id}&admin=${adminCode}`
-        window.history.replaceState({}, "", newUrl)
-
-        subscribeToRoom(data.id)
-        setIsLoading(false)
-      }
-    }
-
     // Check if this participant already joined this room
-    const effectiveRoomId = urlRoomId
-    if (effectiveRoomId) {
-      const stored = localStorage.getItem(`wheel-joined-${effectiveRoomId}`)
+    if (urlRoomId) {
+      const stored = localStorage.getItem(`wheel-joined-${urlRoomId}`)
       if (stored) {
         setHasJoined(true)
         setJoinedName(stored)
       }
-    }
-
-    if (urlRoomId) {
       initExistingRoom(urlRoomId, urlAdminParam)
-    } else {
-      createNewRoom()
     }
 
     return () => {
@@ -684,10 +726,21 @@ function WheelApp() {
   )
 }
 
+function WheelRouter() {
+  const searchParams = useSearchParams()
+  const hasRoom = searchParams.get("room")
+
+  if (!hasRoom) {
+    return <LandingPage />
+  }
+
+  return <RoomView />
+}
+
 export default function WheelContentWrapper() {
   return (
     <Suspense fallback={<LoadingScreen />}>
-      <WheelApp />
+      <WheelRouter />
     </Suspense>
   )
 }
