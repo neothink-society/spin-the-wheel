@@ -290,7 +290,7 @@ export function SpinWheel({
         />
       ) : (
         <StaticWheel
-          key={`static-${participants.length}-${lastRotationRef.current}`}
+          key={`static-${participants.map((p) => p.id).join(",")}-${lastRotationRef.current}`}
           participants={participants}
           rotation={lastRotationRef.current}
         />

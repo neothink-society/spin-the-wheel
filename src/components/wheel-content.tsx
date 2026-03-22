@@ -57,10 +57,6 @@ function LoadingScreen() {
   )
 }
 
-/**
- * Landing page — shown when no room param in URL.
- * Clean shell with a single "Create Room" button.
- */
 function LandingPage() {
   const supabase = createClient()
   const [isCreating, setIsCreating] = useState(false)
@@ -71,11 +67,17 @@ function LandingPage() {
     setIsCreating(true)
     setError(null)
 
-    const adminCode = Math.random().toString(36).substring(2, 10).toUpperCase()
+    const array = new Uint8Array(6)
+    crypto.getRandomValues(array)
+    const adminCode = Array.from(array, (b) => b.toString(36).padStart(2, "0"))
+      .join("")
+      .toUpperCase()
+      .slice(0, 8)
+
     const { data, error: createError } = await supabase
       .from("rooms")
       .insert({ name: "Spin the Wheel", admin_code: adminCode, is_active: true })
-      .select()
+      .select("id")
       .single()
 
     if (createError || !data) {
@@ -84,7 +86,6 @@ function LandingPage() {
       return
     }
 
-    // Navigate to admin URL
     window.location.href = `${window.location.origin}/?room=${data.id}&admin=${adminCode}`
   }
 
@@ -108,7 +109,8 @@ function LandingPage() {
               Pick a random winner
             </h2>
             <p className="text-sm md:text-base text-muted-foreground leading-relaxed">
-              Create a room, share the link with participants, and spin the wheel to choose a winner.
+              Create a room, share the link with participants, and spin the
+              wheel to choose a winner.
             </p>
           </div>
 
@@ -135,7 +137,8 @@ function LandingPage() {
           </Button>
 
           <p className="text-xs text-muted-foreground/60">
-            You'll get an admin link to control the wheel and a participant link to share.
+            You'll get an admin link to control the wheel and a participant
+            link to share.
           </p>
         </div>
       </main>
@@ -143,20 +146,13 @@ function LandingPage() {
   )
 }
 
-/**
- * Room view. Two modes:
- * - Admin (room + admin param matches): full controls
- * - Participant (room only): join + watch
- */
 function RoomView() {
   const searchParams = useSearchParams()
   const supabase = createClient()
 
-  // URL params
   const urlRoomId = searchParams.get("room")
   const urlAdminParam = searchParams.get("admin")
 
-  // State
   const [room, setRoom] = useState<Room | null>(null)
   const [participants, setParticipants] = useState<Participant[]>([])
   const [isAdmin, setIsAdmin] = useState(false)
@@ -164,7 +160,10 @@ function RoomView() {
   const [joinedName, setJoinedName] = useState<string | null>(null)
   const [name, setName] = useState("")
   const [isJoining, setIsJoining] = useState(false)
-  const [spinTarget, setSpinTarget] = useState<{ winnerId: string; spinKey: number } | null>(null)
+  const [spinTarget, setSpinTarget] = useState<{
+    winnerId: string
+    spinKey: number
+  } | null>(null)
   const [showConfetti, setShowConfetti] = useState(false)
   const [currentWinner, setCurrentWinner] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -176,14 +175,18 @@ function RoomView() {
   const isSpinning = spinTarget !== null
   const nonWinners = participants.filter((p) => !p.isWinner)
 
-  // Single mount effect — handles both room creation and room loading
+  // Stable key for StaticWheel — changes when participants change
+  const participantKey = participants.map((p) => p.id).join(",")
+
   useMountEffect(() => {
     let channel: ReturnType<typeof supabase.channel> | null = null
     let cancelled = false
-
     let previousWinnerIds: Set<string> = new Set()
 
-    async function loadParticipants(roomId: string, detectNewWinner = false) {
+    async function loadParticipants(
+      roomId: string,
+      detectNewWinner = false
+    ) {
       const { data } = await supabase
         .from("participants")
         .select("*")
@@ -194,14 +197,12 @@ function RoomView() {
         const mapped = data.map(toParticipant)
         setParticipants(mapped)
 
-        // Detect if a new winner appeared (from admin spinning on another browser)
         if (detectNewWinner) {
           const currentWinnerIds = new Set(
             mapped.filter((p) => p.isWinner).map((p) => p.id)
           )
           for (const p of mapped) {
             if (p.isWinner && !previousWinnerIds.has(p.id)) {
-              // New winner detected — show banner + confetti
               setCurrentWinner(p.name)
               setShowConfetti(true)
               break
@@ -209,7 +210,6 @@ function RoomView() {
           }
           previousWinnerIds = currentWinnerIds
         } else {
-          // Initial load — just record current winners, don't trigger confetti
           previousWinnerIds = new Set(
             mapped.filter((p) => p.isWinner).map((p) => p.id)
           )
@@ -229,16 +229,22 @@ function RoomView() {
             filter: `room_id=eq.${roomId}`,
           },
           () => {
-            loadParticipants(roomId, true)
+            if (!cancelled) {
+              loadParticipants(roomId, true)
+            }
           }
         )
         .subscribe()
     }
 
-    async function initExistingRoom(roomId: string, adminCode: string | null) {
+    async function initExistingRoom(
+      roomId: string,
+      adminCode: string | null
+    ) {
+      // Only select columns we need — never expose admin_code to non-admins
       const { data: roomData, error: roomError } = await supabase
         .from("rooms")
-        .select("*")
+        .select("id, name, admin_code, is_active")
         .eq("id", roomId)
         .single()
 
@@ -251,8 +257,14 @@ function RoomView() {
       }
 
       if (!cancelled) {
-        setRoom(roomData)
-        if (adminCode && adminCode === roomData.admin_code) {
+        // Only store admin_code in state if the caller is admin
+        const isAdminUser = !!(adminCode && adminCode === roomData.admin_code)
+        const roomForState: Room = isAdminUser
+          ? roomData
+          : { ...roomData, admin_code: "" }
+
+        setRoom(roomForState)
+        if (isAdminUser) {
           setIsAdmin(true)
         }
 
@@ -262,7 +274,6 @@ function RoomView() {
       }
     }
 
-    // Check if this participant already joined this room
     if (urlRoomId) {
       const stored = localStorage.getItem(`wheel-joined-${urlRoomId}`)
       if (stored) {
@@ -280,8 +291,6 @@ function RoomView() {
     }
   })
 
-  // --- Event handlers (no useEffect) ---
-
   const handleJoin = useCallback(async () => {
     const trimmed = name.trim()
     if (!trimmed || !room || isJoining) return
@@ -298,35 +307,29 @@ function RoomView() {
     setIsJoining(true)
     setError(null)
 
-    const { data: existing } = await supabase
-      .from("participants")
-      .select("id")
-      .eq("room_id", room.id)
-      .eq("name", trimmed)
-      .single()
-
-    if (existing) {
-      setError("This name is already taken.")
-      setIsJoining(false)
-      return
-    }
-
     const color = SLICE_PALETTE[participants.length % SLICE_PALETTE.length]
 
-    const { error: insertError } = await supabase.from("participants").insert({
-      room_id: room.id,
-      name: trimmed,
-      color,
-      is_winner: false,
-    })
+    // Rely on DB unique constraint (room_id, name) instead of SELECT-then-INSERT
+    const { error: insertError } = await supabase
+      .from("participants")
+      .insert({
+        room_id: room.id,
+        name: trimmed,
+        color,
+        is_winner: false,
+      })
 
     if (insertError) {
-      setError("Failed to join. Please try again.")
+      // 23505 = unique_violation (duplicate name)
+      if (insertError.code === "23505") {
+        setError("This name is already taken.")
+      } else {
+        setError("Failed to join. Please try again.")
+      }
       setIsJoining(false)
       return
     }
 
-    // Persist join to localStorage — one name per browser per room
     localStorage.setItem(`wheel-joined-${room.id}`, trimmed)
     setHasJoined(true)
     setJoinedName(trimmed)
@@ -335,7 +338,7 @@ function RoomView() {
   }, [name, room, isJoining, participants.length, supabase])
 
   async function handleSpin() {
-    if (!room || participants.length === 0 || isSpinning) return
+    if (!isAdmin || !room || participants.length === 0 || isSpinning) return
     if (nonWinners.length === 0) {
       setError("Everyone has won. Reset winners first.")
       return
@@ -354,7 +357,10 @@ function RoomView() {
       winner_id: winner.id,
       winner_name: winner.name,
     })
-    await supabase.from("participants").update({ is_winner: true }).eq("id", winner.id)
+    await supabase
+      .from("participants")
+      .update({ is_winner: true })
+      .eq("id", winner.id)
   }
 
   function handleSpinComplete(winnerId: string) {
@@ -370,7 +376,7 @@ function RoomView() {
   }
 
   async function handleManualPick() {
-    if (!room || participants.length === 0) return
+    if (!isAdmin || !room || participants.length === 0 || isSpinning) return
     if (nonWinners.length === 0) {
       setError("Everyone has won. Reset winners first.")
       return
@@ -379,7 +385,10 @@ function RoomView() {
     setError(null)
     const winner = nonWinners[Math.floor(Math.random() * nonWinners.length)]
 
-    await supabase.from("participants").update({ is_winner: true }).eq("id", winner.id)
+    await supabase
+      .from("participants")
+      .update({ is_winner: true })
+      .eq("id", winner.id)
     await supabase.from("spins").insert({
       room_id: room.id,
       winner_id: winner.id,
@@ -394,8 +403,11 @@ function RoomView() {
   }
 
   async function handleReset() {
-    if (!room) return
-    await supabase.from("participants").update({ is_winner: false }).eq("room_id", room.id)
+    if (!isAdmin || !room || isSpinning) return
+    await supabase
+      .from("participants")
+      .update({ is_winner: false })
+      .eq("room_id", room.id)
     setParticipants((prev) => prev.map((p) => ({ ...p, isWinner: false })))
     setCurrentWinner(null)
     setShowConfetti(false)
@@ -403,7 +415,7 @@ function RoomView() {
   }
 
   async function handleClearAll() {
-    if (!room) return
+    if (!isAdmin || !room || isSpinning) return
     await supabase.from("participants").delete().eq("room_id", room.id)
     setParticipants([])
     setCurrentWinner(null)
@@ -413,6 +425,7 @@ function RoomView() {
   }
 
   async function handleRemoveParticipant(id: string) {
+    if (!isAdmin || isSpinning) return
     await supabase.from("participants").delete().eq("id", id)
     const removed = participants.find((p) => p.id === id)
     setParticipants((prev) => prev.filter((p) => p.id !== id))
@@ -422,8 +435,16 @@ function RoomView() {
     }
   }
 
-  function copyToClipboard(text: string, type: "participant" | "admin") {
-    navigator.clipboard.writeText(text)
+  async function copyToClipboard(
+    text: string,
+    type: "participant" | "admin"
+  ) {
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      // Fallback: select the input so user can copy manually
+      return
+    }
     if (type === "participant") {
       setCopiedParticipant(true)
       setTimeout(() => setCopiedParticipant(false), 2000)
@@ -433,17 +454,14 @@ function RoomView() {
     }
   }
 
-  // --- Derived URLs ---
   const shareUrl =
     typeof window !== "undefined" && room
       ? `${window.location.origin}/?room=${room.id}`
       : ""
   const adminUrl =
-    typeof window !== "undefined" && room
+    typeof window !== "undefined" && room && isAdmin
       ? `${window.location.origin}/?room=${room.id}&admin=${room.admin_code}`
       : ""
-
-  // --- Render ---
 
   if (isLoading) return <LoadingScreen />
 
@@ -468,9 +486,11 @@ function RoomView() {
 
   return (
     <div className="min-h-dvh bg-background text-foreground">
-      <Confetti active={showConfetti} onComplete={() => setShowConfetti(false)} />
+      <Confetti
+        active={showConfetti}
+        onComplete={() => setShowConfetti(false)}
+      />
 
-      {/* Header */}
       <header className="border-b border-border/50 px-4 py-4 md:py-5">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-2.5">
@@ -487,7 +507,8 @@ function RoomView() {
             )}
           </div>
           <span className="text-xs text-muted-foreground hidden sm:block tabular-nums">
-            {participants.length} participant{participants.length !== 1 ? "s" : ""}
+            {participants.length} participant
+            {participants.length !== 1 ? "s" : ""}
             {nonWinners.length < participants.length &&
               ` \u00b7 ${participants.length - nonWinners.length} winner${
                 participants.length - nonWinners.length !== 1 ? "s" : ""
@@ -498,17 +519,20 @@ function RoomView() {
 
       <main className="max-w-6xl mx-auto px-4 py-4 md:py-8">
         {error && (
-          <Alert variant="destructive" className="mb-4 md:mb-6 max-w-2xl mx-auto">
+          <Alert
+            variant="destructive"
+            className="mb-4 md:mb-6 max-w-2xl mx-auto"
+          >
             <AlertDescription className="text-sm">{error}</AlertDescription>
           </Alert>
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-4 md:gap-6">
-          {/* Wheel area */}
           <div className="order-2 lg:order-1">
             <Card>
               <CardContent className="p-3 md:p-6">
                 <SpinWheel
+                  key={participantKey}
                   participants={participants}
                   spinTarget={spinTarget}
                   onSpinComplete={handleSpinComplete}
@@ -525,7 +549,6 @@ function RoomView() {
                   </div>
                 )}
 
-                {/* Admin controls */}
                 {isAdmin && (
                   <div className="mt-4 md:mt-6 flex gap-2 max-w-sm mx-auto">
                     <Button
@@ -542,40 +565,38 @@ function RoomView() {
                       size="lg"
                       variant="outline"
                       className="h-11 md:h-12 px-3"
-                      title="Random pick (no animation)"
+                      aria-label="Random pick without animation"
                     >
                       <Dices className="w-4 h-4" />
                     </Button>
                     <Button
                       onClick={handleReset}
+                      disabled={isSpinning}
                       size="lg"
                       variant="outline"
                       className="h-11 md:h-12 px-3"
-                      title="Reset all winners"
+                      aria-label="Reset all winners"
                     >
                       <RotateCcw className="w-4 h-4" />
                     </Button>
                   </div>
                 )}
 
-                {/* Participant-only message — no controls */}
                 {!isAdmin && participants.length > 0 && (
                   <p className="mt-4 text-center text-xs text-muted-foreground">
-                    Waiting for the admin to spin the wheel\u2026
+                    Waiting for the admin to spin the wheel&hellip;
                   </p>
                 )}
               </CardContent>
             </Card>
           </div>
 
-          {/* Sidebar */}
           <div className="space-y-4 order-1 lg:order-2">
-            {/* Join — show form or confirmation */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground uppercase tracking-wider">
                   <Plus className="w-3.5 h-3.5" />
-                  {hasJoined && !isAdmin ? "You're In" : "Join the Wheel"}
+                  {hasJoined && !isAdmin ? "You\u2019re In" : "Join the Wheel"}
                 </CardTitle>
               </CardHeader>
               <CardContent>
@@ -583,7 +604,8 @@ function RoomView() {
                   <div className="flex items-center gap-2.5 py-2">
                     <Check className="w-4 h-4 text-green-500 shrink-0" />
                     <p className="text-sm text-foreground">
-                      You joined as <span className="font-semibold">{joinedName}</span>
+                      You joined as{" "}
+                      <span className="font-semibold">{joinedName}</span>
                     </p>
                   </div>
                 ) : (
@@ -592,7 +614,9 @@ function RoomView() {
                       placeholder="Enter your name"
                       value={name}
                       onChange={(e) => setName(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleJoin()}
+                      onKeyDown={(e) =>
+                        e.key === "Enter" && handleJoin()
+                      }
                       className="h-10 text-sm"
                       maxLength={20}
                       autoComplete="off"
@@ -610,7 +634,6 @@ function RoomView() {
               </CardContent>
             </Card>
 
-            {/* Participant list */}
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between">
@@ -628,6 +651,7 @@ function RoomView() {
                       variant="ghost"
                       size="xs"
                       onClick={handleClearAll}
+                      disabled={isSpinning}
                       className="text-muted-foreground hover:text-red-500 -mr-1"
                     >
                       <Trash2 className="w-3 h-3 mr-1" />
@@ -663,8 +687,12 @@ function RoomView() {
                       </div>
                       {isAdmin && (
                         <button
-                          onClick={() => handleRemoveParticipant(participant.id)}
-                          className="text-muted-foreground/50 hover:text-red-500 shrink-0 ml-1 p-1 opacity-60 md:opacity-0 md:group-hover:opacity-100 transition-opacity"
+                          onClick={() =>
+                            handleRemoveParticipant(participant.id)
+                          }
+                          disabled={isSpinning}
+                          aria-label={`Remove ${participant.name}`}
+                          className="text-muted-foreground/50 hover:text-red-500 shrink-0 ml-1 p-1 opacity-60 md:opacity-0 md:group-hover:opacity-100 transition-opacity disabled:opacity-20"
                         >
                           <X className="w-3.5 h-3.5" />
                         </button>
@@ -673,14 +701,15 @@ function RoomView() {
                   ))}
                   {participants.length === 0 && (
                     <div className="text-center py-8 text-muted-foreground/60">
-                      <p className="text-sm">Waiting for participants\u2026</p>
+                      <p className="text-sm">
+                        Waiting for participants&hellip;
+                      </p>
                     </div>
                   )}
                 </div>
               </CardContent>
             </Card>
 
-            {/* Share links */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground uppercase tracking-wider">
@@ -703,7 +732,10 @@ function RoomView() {
                     <Button
                       variant="outline"
                       size="icon-xs"
-                      onClick={() => copyToClipboard(shareUrl, "participant")}
+                      onClick={() =>
+                        copyToClipboard(shareUrl, "participant")
+                      }
+                      aria-label="Copy participant link"
                       className="shrink-0"
                     >
                       {copiedParticipant ? (
@@ -729,7 +761,10 @@ function RoomView() {
                       <Button
                         variant="outline"
                         size="icon-xs"
-                        onClick={() => copyToClipboard(adminUrl, "admin")}
+                        onClick={() =>
+                          copyToClipboard(adminUrl, "admin")
+                        }
+                        aria-label="Copy admin link"
                         className="shrink-0"
                       >
                         {copiedAdmin ? (
