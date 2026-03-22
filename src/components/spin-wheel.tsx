@@ -18,8 +18,24 @@ interface SpinWheelProps {
 }
 
 /**
+ * Wheel slice colors — alternating warm/cool grays with red accent.
+ * Designed for high contrast text readability on a dark background.
+ */
+const SLICE_PALETTE = [
+  "#dc2626", // red-600
+  "#3f3f46", // zinc-700
+  "#a1a1aa", // zinc-400
+  "#52525b", // zinc-600
+  "#ef4444", // red-500
+  "#71717a", // zinc-500
+  "#27272a", // zinc-800
+  "#d4d4d8", // zinc-300
+  "#b91c1c", // red-700
+  "#a1a1aa", // zinc-400
+]
+
+/**
  * Pure function: draws the wheel state to a canvas.
- * No React hooks, no side effects — just canvas drawing.
  */
 function drawWheel(
   canvas: HTMLCanvasElement,
@@ -41,17 +57,12 @@ function drawWheel(
 
   ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-  // Outer glow
+  // Subtle outer ring
   ctx.beginPath()
-  ctx.arc(centerX, centerY, radius + 10, 0, 2 * Math.PI)
-  const glowGradient = ctx.createRadialGradient(
-    centerX, centerY, radius,
-    centerX, centerY, radius + 10
-  )
-  glowGradient.addColorStop(0, "rgba(255, 0, 128, 0.5)")
-  glowGradient.addColorStop(1, "rgba(0, 217, 255, 0)")
-  ctx.fillStyle = glowGradient
-  ctx.fill()
+  ctx.arc(centerX, centerY, radius + 6, 0, 2 * Math.PI)
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.06)"
+  ctx.lineWidth = 12
+  ctx.stroke()
 
   // Draw slices
   ctx.save()
@@ -65,19 +76,17 @@ function drawWheel(
     const startAngle = index * sliceAngle
     const endAngle = startAngle + sliceAngle
 
+    // Slice fill
     ctx.beginPath()
     ctx.moveTo(0, 0)
     ctx.arc(0, 0, radius, startAngle, endAngle)
     ctx.closePath()
-
-    const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, radius)
-    gradient.addColorStop(0, participant.color)
-    gradient.addColorStop(1, participant.color + "dd")
-    ctx.fillStyle = gradient
+    ctx.fillStyle = participant.color
     ctx.fill()
 
-    ctx.strokeStyle = "#000000"
-    ctx.lineWidth = 4
+    // Slice border
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.4)"
+    ctx.lineWidth = 2
     ctx.stroke()
 
     // Name label
@@ -85,11 +94,17 @@ function drawWheel(
     ctx.rotate(startAngle + sliceAngle / 2)
     ctx.textAlign = "center"
     ctx.textBaseline = "middle"
-    ctx.fillStyle = "#ffffff"
-    const fontSize = Math.max(14, Math.min(20, radius / 15))
-    ctx.font = `bold ${fontSize}px system-ui, -apple-system, sans-serif`
-    ctx.shadowColor = "rgba(0, 0, 0, 1)"
-    ctx.shadowBlur = 6
+
+    // Determine text color based on slice brightness
+    const isLightSlice = ["#a1a1aa", "#d4d4d8"].includes(participant.color)
+    ctx.fillStyle = isLightSlice ? "#18181b" : "#fafafa"
+
+    const fontSize = Math.max(13, Math.min(18, radius / 16))
+    ctx.font = `600 ${fontSize}px Inter, system-ui, -apple-system, sans-serif`
+    ctx.shadowColor = isLightSlice
+      ? "rgba(255, 255, 255, 0.5)"
+      : "rgba(0, 0, 0, 0.7)"
+    ctx.shadowBlur = 4
     ctx.shadowOffsetX = 0
     ctx.shadowOffsetY = 0
 
@@ -99,61 +114,46 @@ function drawWheel(
         ? participant.name.substring(0, maxLength - 1) + "\u2026"
         : participant.name
 
-    // Triple-draw for strong shadow
-    for (let i = 0; i < 3; i++) {
-      ctx.fillText(displayName, radius * 0.6, 0)
-    }
+    ctx.fillText(displayName, radius * 0.6, 0)
     ctx.restore()
   }
 
   ctx.restore()
 
-  // Center button
-  const centerGradient = ctx.createRadialGradient(
-    centerX, centerY, 0,
-    centerX, centerY, 30
-  )
-  centerGradient.addColorStop(0, "#FFD700")
-  centerGradient.addColorStop(1, "#FFA500")
-
+  // Center hub — dark with subtle ring
   ctx.beginPath()
-  ctx.arc(centerX, centerY, 30, 0, 2 * Math.PI)
-  ctx.fillStyle = centerGradient
-  ctx.shadowColor = "rgba(255, 215, 0, 0.8)"
-  ctx.shadowBlur = 20
+  ctx.arc(centerX, centerY, 24, 0, 2 * Math.PI)
+  ctx.fillStyle = "#18181b"
+  ctx.shadowColor = "rgba(0, 0, 0, 0.5)"
+  ctx.shadowBlur = 12
   ctx.fill()
   ctx.shadowBlur = 0
-  ctx.strokeStyle = "#000000"
-  ctx.lineWidth = 4
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.15)"
+  ctx.lineWidth = 2
   ctx.stroke()
 
-  // Pointer triangle (right side)
+  // Inner dot
   ctx.beginPath()
-  ctx.moveTo(centerX + radius + 10, centerY)
-  ctx.lineTo(centerX + radius - 35, centerY - 20)
-  ctx.lineTo(centerX + radius - 35, centerY + 20)
-  ctx.closePath()
+  ctx.arc(centerX, centerY, 6, 0, 2 * Math.PI)
+  ctx.fillStyle = "#dc2626"
+  ctx.fill()
 
-  const pointerGradient = ctx.createLinearGradient(
-    centerX + radius - 35, 0,
-    centerX + radius + 10, 0
-  )
-  pointerGradient.addColorStop(0, "#FF0080")
-  pointerGradient.addColorStop(1, "#FF6B9D")
-  ctx.fillStyle = pointerGradient
-  ctx.shadowColor = "rgba(255, 0, 128, 0.8)"
-  ctx.shadowBlur = 15
+  // Pointer triangle (right side) — red
+  ctx.beginPath()
+  ctx.moveTo(centerX + radius + 8, centerY)
+  ctx.lineTo(centerX + radius - 28, centerY - 16)
+  ctx.lineTo(centerX + radius - 28, centerY + 16)
+  ctx.closePath()
+  ctx.fillStyle = "#dc2626"
+  ctx.shadowColor = "rgba(220, 38, 38, 0.4)"
+  ctx.shadowBlur = 10
   ctx.fill()
   ctx.shadowBlur = 0
-  ctx.strokeStyle = "#000000"
-  ctx.lineWidth = 4
+  ctx.strokeStyle = "#18181b"
+  ctx.lineWidth = 2
   ctx.stroke()
 }
 
-/**
- * Renders the wheel at a fixed rotation. Draws once on mount.
- * Parent uses key={...} to force remount when participants change.
- */
 function StaticWheel({
   participants,
   rotation,
@@ -174,17 +174,12 @@ function StaticWheel({
       ref={canvasRef}
       width={600}
       height={600}
-      className="max-w-full h-auto w-full drop-shadow-2xl"
+      className="max-w-full h-auto w-full"
       style={{ maxHeight: "600px", maxWidth: "600px" }}
     />
   )
 }
 
-/**
- * Animates the wheel from startRotation to the winner's slice.
- * Runs the animation once on mount, calls onComplete when done.
- * Parent mounts this conditionally when a spin is triggered.
- */
 function AnimatedWheel({
   participants,
   winnerId,
@@ -239,16 +234,14 @@ function AnimatedWheel({
       ref={canvasRef}
       width={600}
       height={600}
-      className="max-w-full h-auto w-full drop-shadow-2xl"
+      className="max-w-full h-auto w-full"
       style={{ maxHeight: "600px", maxWidth: "600px" }}
     />
   )
 }
 
-/**
- * Orchestrates static vs animated wheel rendering.
- * No useEffect — animation is triggered by conditional mounting.
- */
+export { SLICE_PALETTE }
+
 export function SpinWheel({
   participants,
   spinTarget,
@@ -258,10 +251,8 @@ export function SpinWheel({
   const [isAnimating, setIsAnimating] = useState(false)
   const lastSpinKeyRef = useRef<number | null>(null)
 
-  // Detect new spin target via derived comparison (not useEffect)
   const shouldAnimate =
-    spinTarget !== null &&
-    spinTarget.spinKey !== lastSpinKeyRef.current
+    spinTarget !== null && spinTarget.spinKey !== lastSpinKeyRef.current
 
   if (shouldAnimate && !isAnimating) {
     lastSpinKeyRef.current = spinTarget.spinKey
@@ -276,24 +267,19 @@ export function SpinWheel({
 
   if (participants.length === 0) {
     return (
-      <div className="flex items-center justify-center w-full min-h-[400px] md:min-h-[600px]">
-        <div className="text-center space-y-4 max-w-md px-6">
-          <Users className="w-20 h-20 mx-auto text-muted-foreground/30" />
-          <div className="space-y-2">
-            <p className="text-foreground text-lg md:text-xl font-semibold">
-              No participants yet
-            </p>
-            <p className="text-muted-foreground text-sm md:text-base leading-relaxed">
-              Add some names to get started!
-            </p>
-          </div>
+      <div className="flex items-center justify-center w-full min-h-[300px] md:min-h-[500px]">
+        <div className="text-center space-y-3 max-w-xs px-6">
+          <Users className="w-12 h-12 mx-auto text-muted-foreground/30" />
+          <p className="text-muted-foreground text-sm">
+            Add some names to get started
+          </p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="flex items-center justify-center w-full p-4">
+    <div className="flex items-center justify-center w-full">
       {isAnimating && spinTarget ? (
         <AnimatedWheel
           key={spinTarget.spinKey}

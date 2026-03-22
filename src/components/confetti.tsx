@@ -15,14 +15,14 @@ interface ConfettiParticle {
 }
 
 const COLORS = [
-  "#FF0080",
-  "#00D9FF",
-  "#FFD700",
-  "#FF6B9D",
-  "#4ECDC4",
-  "#9D4EDD",
-  "#F72585",
-  "#06FFA5",
+  "#dc2626",
+  "#ef4444",
+  "#f87171",
+  "#a1a1aa",
+  "#71717a",
+  "#d4d4d8",
+  "#fecaca",
+  "#52525b",
 ]
 const SHAPES: Array<"square" | "circle" | "rect"> = [
   "square",
@@ -31,24 +31,19 @@ const SHAPES: Array<"square" | "circle" | "rect"> = [
 ]
 
 function generateParticles(): ConfettiParticle[] {
-  return Array.from({ length: 100 }, (_, i) => ({
+  return Array.from({ length: 80 }, (_, i) => ({
     id: i,
     x: Math.random() * 100,
     rotation: Math.random() * 360,
     color: COLORS[Math.floor(Math.random() * COLORS.length)],
     delay: Math.random() * 0.3,
     drift: (Math.random() - 0.5) * 2,
-    size: Math.random() * 8 + 6,
+    size: Math.random() * 6 + 4,
     shape: SHAPES[Math.floor(Math.random() * SHAPES.length)],
   }))
 }
 
-/**
- * Renders confetti particles and auto-cleans up after animation.
- * Mounted conditionally by parent — no useEffect needed for activation.
- */
 function ConfettiParticles({ onComplete }: { onComplete?: () => void }) {
-  // Generate once on mount — useState initializer only runs once
   const [particles] = useState(generateParticles)
 
   useMountEffect(() => {
@@ -77,10 +72,8 @@ function ConfettiParticles({ onComplete }: { onComplete?: () => void }) {
               particle.shape === "circle"
                 ? "50%"
                 : particle.shape === "rect"
-                  ? "2px"
+                  ? "1px"
                   : "0",
-            boxShadow: `0 0 ${particle.size}px ${particle.color}`,
-            // CSS variable for drift in animation
             "--confetti-drift": particle.drift,
           } as React.CSSProperties}
         />
@@ -89,11 +82,6 @@ function ConfettiParticles({ onComplete }: { onComplete?: () => void }) {
   )
 }
 
-/**
- * Confetti wrapper — conditional mounting pattern instead of useEffect.
- * When active=true, ConfettiParticles mounts and runs.
- * When active=false, nothing renders.
- */
 export function Confetti({
   active,
   onComplete,
