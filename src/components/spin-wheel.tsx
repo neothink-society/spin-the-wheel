@@ -201,9 +201,13 @@ function AnimatedWheel({
     if (winnerIndex === -1) return
 
     const sliceAngle = 360 / participants.length
-    const targetAngle = 360 - (winnerIndex * sliceAngle + sliceAngle / 2)
+    // Absolute rotation where the winner's slice center aligns with the pointer (0°/right)
+    const desiredEnd = 360 - (winnerIndex * sliceAngle + sliceAngle / 2)
+    // Calculate additional rotation needed from current position to land on desiredEnd
+    let delta = desiredEnd - (startRotation % 360)
+    if (delta < 0) delta += 360
     const spinRotations = 5 * 360
-    const finalRotation = startRotation + spinRotations + targetAngle
+    const finalRotation = startRotation + spinRotations + delta
 
     const duration = 4500
     const startTime = Date.now()
