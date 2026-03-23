@@ -46,7 +46,7 @@ function drawWheel(
   if (!ctx || participants.length === 0) return
 
   const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1
-  const size = Math.min(canvas.clientWidth, 600)
+  const size = Math.min(canvas.clientWidth || 600, 600)
   canvas.width = size * dpr
   canvas.height = size * dpr
   ctx.scale(dpr, dpr)
@@ -89,11 +89,10 @@ function drawWheel(
     ctx.lineWidth = 2
     ctx.stroke()
 
-    // Name label
+    // Name label — flip text on bottom half so it's never upside-down
     ctx.save()
-    ctx.rotate(startAngle + sliceAngle / 2)
-    ctx.textAlign = "center"
-    ctx.textBaseline = "middle"
+    const midAngle = startAngle + sliceAngle / 2
+    ctx.rotate(midAngle)
 
     // Determine text color based on slice brightness
     const isLightSlice = ["#a1a1aa", "#d4d4d8"].includes(participant.color)
@@ -114,7 +113,17 @@ function drawWheel(
         ? participant.name.substring(0, maxLength - 1) + "\u2026"
         : participant.name
 
-    ctx.fillText(displayName, radius * 0.6, 0)
+    // Check if text would be upside-down (angle between π/2 and 3π/2)
+    const normalizedAngle = midAngle % (2 * Math.PI)
+    const isUpsideDown =
+      normalizedAngle > Math.PI / 2 && normalizedAngle < (3 * Math.PI) / 2
+
+    if (isUpsideDown) {
+      ctx.rotate(Math.PI)
+      ctx.fillText(displayName, -radius * 0.6, 0)
+    } else {
+      ctx.fillText(displayName, radius * 0.6, 0)
+    }
     ctx.restore()
   }
 
